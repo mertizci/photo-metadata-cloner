@@ -1,0 +1,460 @@
+"""Watermark removal using diffusion model regeneration attack.
+
+Based on the paper "Image Watermarks Are Removable Using Controllable
+Regeneration from Clean Noise" (ICLR 2025).
+
+This module implements a simple regeneration attack that:
+1. Encodes the watermarked image to latent space
+2. Adds noise via forward diffusion process
+3. Denoises via reverse diffusion process
+4. Decodes back to pixel space
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Any, Callable
+
+from PIL import Image
+
+from watermark_profiles import (
+    DEFAULT_MODEL_ID,
+    CTRLREGEN_MODEL_ID,
+    LOW_STRENGTH,
+    MEDIUM_STRENGTH,
+    HIGH_STRENGTH,
+    detect_model_profile,
+    get_model_id_for_profile,
+    get_recommended_strength,
+)
+
+logger = logging.getLogger(__name__)
+
+# Check for optional dependencies
+_HAS_TORCH = False
+_HAS_DIFFUSERS = False
+
+try:
+    import torch
+
+    _HAS_TORCH = True
+except ImportError:
+    torch = None  # type: ignore
+
+try:
+    from diffusers import StableDiffusionImg2ImgPipeline
+
+    _HAS_DIFFUSERS = True
+except ImportError:
+    StableDiffusionImg2ImgPipeline = None  # type: ignore
+
+
+def is_watermark_removal_available() -> bool:
+    """Check if watermark removal dependencies are installed."""
+    return _HAS_TORCH and _HAS_DIFFUSERS
+
+
+def get_device() -> str:
+    """Get the best available device for inference."""
+    if not _HAS_TORCH:
+        return "cpu"
+    if torch.cuda.is_available():  # type: ignore
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+# Keep legacy name available for backwards compatibility
+_detect_model_profile_from_id = detect_model_profile
+
+
+class WatermarkRemover:
+    """Remove watermarks from images using diffusion model regeneration.
+
+    Attributes:
+        model_id: HuggingFace model ID for the diffusion model.
+        device: Device to run inference on (cuda, mps, or cpu).
+    """
+
+    DEFAULT_MODEL_ID = DEFAULT_MODEL_ID
+    CTRLREGEN_MODEL_ID = CTRLREGEN_MODEL_ID
+    LOW_STRENGTH = LOW_STRENGTH
+    MEDIUM_STRENGTH = MEDIUM_STRENGTH
+    HIGH_STRENGTH = HIGH_STRENGTH
+
+    def __init__(
+        self,
+        model_id: str | None = None,
+        device: str | None = None,
+        torch_dtype: Any = None,
+        progress_callback: Callable[[str], None] | None = None,
+        hf_token: str | None = None,
+    ):
+        self.model_id = model_id or self.DEFAULT_MODEL_ID
+        self.model_profile = detect_model_profile(self.model_id)
+
+        if not is_watermark_removal_available():
+            raise ImportError(
+                "Watermark removal requires additional dependencies. "
+                "Install them with: pip install torch diffusers transformers"
+            )
+        self.device = (device or get_device()).lower()
+        if self.device == "auto":
+            self.device = get_device()
+        if self.device not in {"cpu", "mps", "cuda"}:
+            raise ValueError(
+                f"Unsupported device '{device}'. Use one of: auto, cpu, mps, cuda."
+            )
+        if torch_dtype is None:
+            self.torch_dtype = torch.float16 if self.device != "cpu" else torch.float32  # type: ignore
+        else:
+            self.torch_dtype = torch_dtype
+
+        self._pipeline: StableDiffusionImg2ImgPipeline | None = None
+        self._ctrlregen_engine: Any = None
+        self._progress_callback = progress_callback
+        self.hf_token: str | None = hf_token or os.environ.get("HF_TOKEN")
+
+    def _set_progress(self, message: str) -> None:
+        """Send a progress update through callback when available."""
+        if self._progress_callback is None:
+            return
+        try:
+            self._progress_callback(message)
+        except Exception:
+            pass
+
+    # ── Preload ──────────────────────────────────────────────────────
+
+    def preload(self) -> None:
+        """Eagerly load the pipeline so download progress bars are visible."""
+        if self.model_profile == "ctrlregen":
+            self._run_ctrlregen_preload()
+        else:
+            self._load_pipeline()
+
+    def _run_ctrlregen_preload(self) -> None:
+        """Ensure the CtrlRegen engine and all its models are loaded."""
+        from ctrlregen import CtrlRegenEngine, is_ctrlregen_available
+
+        if not is_ctrlregen_available():
+            raise ImportError(
+                "CtrlRegen requires additional dependencies. "
+                "Install with: pip install noai-watermark[ctrlregen]"
+            )
+        if self._ctrlregen_engine is None:
+            self._ctrlregen_engine = self._make_ctrlregen_engine()
+        self._ctrlregen_engine.load()
+
+    def _make_ctrlregen_engine(self) -> Any:
+        """Create a new CtrlRegenEngine with current settings."""
+        from ctrlregen import CtrlRegenEngine
+
+        base_model = (
+            self.model_id if self.model_id != self.CTRLREGEN_MODEL_ID else None
+        )
+        return CtrlRegenEngine(
+            base_model_id=base_model,
+            device=self.device,
+            torch_dtype=self.torch_dtype,
+            hf_token=self.hf_token,
+            progress_callback=self._progress_callback,
+        )
+
+    # ── Pipeline loading ─────────────────────────────────────────────
+
+    def _load_pipeline(self) -> StableDiffusionImg2ImgPipeline:
+        """Load the diffusion pipeline lazily."""
+        if self._pipeline is None:
+            logger.info(f"Loading model {self.model_id} on {self.device}...")
+            self._set_progress(f"Loading model weights: {self.model_id}")
+
+            load_kwargs: dict[str, Any] = {
+                "torch_dtype": self.torch_dtype,
+                "safety_checker": None,
+                "requires_safety_checker": False,
+            }
+            if self.hf_token:
+                load_kwargs["token"] = self.hf_token
+
+            self._pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(  # type: ignore
+                self.model_id, **load_kwargs,
+            )
+
+            self._set_progress(f"Moving model to device: {self.device}")
+            self._pipeline = self._pipeline.to(self.device)  # type: ignore
+
+            if hasattr(self._pipeline, "enable_xformers_memory_efficient_attention"):
+                try:
+                    self._set_progress("Enabling memory optimizations...")
+                    self._pipeline.enable_xformers_memory_efficient_attention()  # type: ignore
+                except Exception:
+                    pass
+
+            logger.info("Model loaded successfully")
+            self._set_progress("Model initialized. Preparing input image...")
+
+        return self._pipeline  # type: ignore
+
+    # ── Core removal ─────────────────────────────────────────────────
+
+    def remove_watermark(
+        self,
+        image_path: Path,
+        output_path: Path | None = None,
+        strength: float | None = None,
+        num_inference_steps: int = 50,
+        guidance_scale: float | None = None,
+        seed: int | None = None,
+    ) -> Path:
+        """Remove watermark from an image using regeneration attack.
+
+        Args:
+            image_path: Path to the watermarked image.
+            output_path: Path for the cleaned image. If None, modifies in place.
+            strength: Denoising strength (0.0-1.0).
+            num_inference_steps: Number of denoising steps.
+            guidance_scale: Classifier-free guidance scale.
+            seed: Random seed for reproducibility.
+
+        Returns:
+            Path to the cleaned image.
+
+        Raises:
+            FileNotFoundError: If input image doesn't exist.
+            ValueError: If strength is not in valid range.
+        """
+        if not image_path.exists():
+            raise FileNotFoundError(f"Image not found: {image_path}")
+
+        if output_path is None:
+            output_path = image_path
+
+        strength = strength or self.LOW_STRENGTH
+
+        if not 0.0 <= strength <= 1.0:
+            raise ValueError(f"Strength must be between 0.0 and 1.0, got {strength}")
+
+        if guidance_scale is None:
+            guidance_scale = 2.0 if self.model_profile == "ctrlregen" else 7.5
+
+        self._set_progress("Loading and preprocessing input image...")
+        init_image = Image.open(image_path).convert("RGB")
+        w, h = init_image.size
+        self._set_progress(f"Image loaded: {w}x{h}px | Model: {self.model_id}")
+
+        generator = None
+        if seed is not None and _HAS_TORCH:
+            self._set_progress(f"Setting reproducible seed: {seed}")
+            generator = torch.Generator(device=self.device).manual_seed(seed)  # type: ignore
+
+        effective_steps = max(1, int(num_inference_steps * strength))
+        self._set_progress(
+            f"Config: strength={strength}, steps={num_inference_steps} "
+            f"(~{effective_steps} effective), guidance={guidance_scale}, device={self.device}"
+        )
+
+        _total_start = time.monotonic()
+
+        if self.model_profile == "ctrlregen":
+            cleaned_image = self._run_ctrlregen(
+                init_image, strength, num_inference_steps, guidance_scale, generator,
+            )
+        else:
+            cleaned_image = self._run_img2img(
+                init_image, strength, num_inference_steps, guidance_scale, generator,
+            )
+
+        self._set_progress(
+            f"Regeneration complete · Output: {w}x{h}px {cleaned_image.mode}"
+        )
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fmt = output_path.suffix.lower()
+        if fmt in (".jpg", ".jpeg"):
+            self._set_progress(f"Encoding as JPEG → {output_path.name}...")
+        else:
+            self._set_progress(f"Encoding as PNG → {output_path.name}...")
+        cleaned_image.save(output_path)
+
+        if output_path.exists():
+            self._set_progress("Stripping AI metadata from output...")
+            try:
+                from cleaner import remove_ai_metadata
+                remove_ai_metadata(output_path, output_path, keep_standard=True)
+            except Exception:
+                logger.debug("AI metadata stripping skipped", exc_info=True)
+
+        total_time = time.monotonic() - _total_start
+
+        size_str = ""
+        try:
+            file_size = output_path.stat().st_size
+            if file_size < 1024 * 1024:
+                size_str = f" ({file_size / 1024:.0f}KB)"
+            else:
+                size_str = f" ({file_size / (1024 * 1024):.1f}MB)"
+        except OSError:
+            pass
+
+        logger.info(f"Cleaned image saved to {output_path}")
+        self._set_progress(
+            f"✓ Saved {output_path.name}{size_str} · "
+            f"{w}x{h}px · {total_time:.0f}s total"
+        )
+
+        return output_path
+
+    # ── Img2img runner ───────────────────────────────────────────────
+
+    def _run_img2img(
+        self,
+        init_image: Image.Image,
+        strength: float,
+        num_inference_steps: int,
+        guidance_scale: float,
+        generator: Any,
+    ) -> Image.Image:
+        """Execute the img2img pipeline with progress and MPS fallback."""
+        from img2img_runner import run_img2img_with_mps_fallback
+
+        result_image, final_device = run_img2img_with_mps_fallback(
+            load_pipeline=self._load_pipeline,
+            image=init_image,
+            strength=strength,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            generator=generator,
+            device=self.device,
+            set_progress=self._set_progress,
+            reload_on_cpu=self._reload_pipeline_on_cpu,
+        )
+
+        if final_device != self.device:
+            self.device = final_device
+            self.torch_dtype = torch.float32  # type: ignore[assignment]
+
+        return result_image
+
+    def _reload_pipeline_on_cpu(self) -> Any:
+        """Reload pipeline on CPU after MPS failure."""
+        self.device = "cpu"
+        self.torch_dtype = torch.float32  # type: ignore[assignment]
+        self._pipeline = None
+        return self._load_pipeline()
+
+    # ── CtrlRegen runner ─────────────────────────────────────────────
+
+    def _run_ctrlregen(
+        self,
+        init_image: Image.Image,
+        strength: float,
+        num_inference_steps: int,
+        guidance_scale: float,
+        generator: Any,
+    ) -> Image.Image:
+        """Run CtrlRegen pipeline with MPS fallback."""
+        from ctrlregen import CtrlRegenEngine, is_ctrlregen_available
+        from progress import is_mps_error
+
+        if not is_ctrlregen_available():
+            raise ImportError(
+                "CtrlRegen requires additional dependencies. "
+                "Install with: pip install noai-watermark[ctrlregen]"
+            )
+
+        if self._ctrlregen_engine is None:
+            self._ctrlregen_engine = self._make_ctrlregen_engine()
+
+        seed = None
+        if generator is not None and hasattr(generator, "initial_seed"):
+            seed = generator.initial_seed()
+
+        try:
+            return self._ctrlregen_engine.run(
+                image=init_image,
+                strength=strength,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                seed=seed,
+            )
+        except RuntimeError as error:
+            if self.device == "mps" and is_mps_error(error):
+                logger.warning(
+                    "MPS out of memory during CtrlRegen. Falling back to CPU."
+                )
+                self._set_progress("MPS out of memory! Retrying CtrlRegen on CPU...")
+                try:
+                    if _HAS_TORCH and hasattr(torch, "mps"):
+                        torch.mps.empty_cache()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
+                self.device = "cpu"
+                self.torch_dtype = torch.float32  # type: ignore[assignment]
+                self._ctrlregen_engine = self._make_ctrlregen_engine()
+
+                return self._ctrlregen_engine.run(
+                    image=init_image,
+                    strength=strength,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                    seed=seed,
+                )
+            raise
+
+    # ── Batch ────────────────────────────────────────────────────────
+
+    def remove_watermark_batch(
+        self,
+        input_dir: Path,
+        output_dir: Path,
+        strength: float | None = None,
+        num_inference_steps: int = 50,
+        extensions: tuple[str, ...] = (".png", ".jpg", ".jpeg", ".webp"),
+    ) -> list[Path]:
+        """Remove watermarks from all images in a directory."""
+        if not input_dir.exists():
+            raise FileNotFoundError(f"Input directory not found: {input_dir}")
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        cleaned_paths: list[Path] = []
+
+        for ext in extensions:
+            for image_path in input_dir.glob(f"*{ext}"):
+                output_path = output_dir / image_path.name
+                try:
+                    result_path = self.remove_watermark(
+                        image_path=image_path,
+                        output_path=output_path,
+                        strength=strength,
+                        num_inference_steps=num_inference_steps,
+                    )
+                    cleaned_paths.append(result_path)
+                except Exception as e:
+                    logger.error(f"Failed to process {image_path}: {e}")
+
+        return cleaned_paths
+
+
+# ── Convenience function ─────────────────────────────────────────────
+
+def remove_watermark(
+    image_path: Path,
+    output_path: Path | None = None,
+    strength: float = 0.04,
+    model_id: str | None = None,
+    device: str | None = None,
+    hf_token: str | None = None,
+) -> Path:
+    """Convenience function to remove watermark from an image."""
+    remover = WatermarkRemover(model_id=model_id, device=device, hf_token=hf_token)
+    return remover.remove_watermark(
+        image_path=image_path,
+        output_path=output_path,
+        strength=strength,
+    )

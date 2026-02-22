@@ -1,0 +1,7 @@
+# Python bytecode and cache directories
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# IDE settings
+.idea/

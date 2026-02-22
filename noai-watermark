@@ -1,0 +1,13 @@
+#!/bin/bash
+# Wrapper script to run noai-watermark without activating venv manually
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV_PATH="$SCRIPT_DIR/.venv"
+
+if [ ! -d "$VENV_PATH" ]; then
+    echo "Error: Virtual environment not found. Run: python3 -m venv .venv && source .venv/bin/activate && pip install -e ."
+    exit 1
+fi
+
+source "$VENV_PATH/bin/activate"
+python3 -m cli "$@"
