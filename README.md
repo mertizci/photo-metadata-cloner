@@ -5,6 +5,10 @@
 
 # noai-watermark
 
+<a href="https://www.paypal.com/donate/?hosted_button_id=8BKTHWAHUPWPG">
+<img src="https://img.shields.io/badge/Donate-PayPal-blue.svg?logo=paypal" alt="Donate via PayPal" />
+</a>
+
 **Remove invisible watermarks and manage AI image metadata.**
 
 AI image generators (Google Gemini, DALL-E, Midjourney, Stable Diffusion, etc.) embed invisible markers into every image they produce. These markers come in two forms:
