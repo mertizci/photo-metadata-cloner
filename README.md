@@ -61,7 +61,7 @@ Default settings (`--strength 0.04 --steps 50`) — watermark removed, image vis
 > *"Based on a SynthID analysis, this image was not made with Google AI. However, it is not possible to determine if it was generated or edited using other AI tools."*
 
 ```bash
-noai-watermark source.png --remove-watermark --strength 0.04 --steps 50 -o cleaned.png
+noai-watermark source.png --strength 0.04 --steps 50 -o cleaned.png
 ```
 
 ---
@@ -93,7 +93,7 @@ Don't use this to strip attribution from content that isn't yours. Don't use it 
 ```bash
 pip install "noai-watermark[watermark]"
 
-noai-watermark source.png --remove-watermark -o cleaned.png
+noai-watermark source.png -o cleaned.png
 ```
 
 For best quality (larger download):
@@ -101,7 +101,7 @@ For best quality (larger download):
 ```bash
 pip install "noai-watermark[ctrlregen]"
 
-noai-watermark source.png --remove-watermark --model-profile ctrlregen -o cleaned.png
+noai-watermark source.png --model-profile ctrlregen -o cleaned.png
 ```
 
 ---
@@ -211,53 +211,31 @@ Example: `--model-profile default --model runwayml/stable-diffusion-v1-5` uses t
 
 ## CLI Reference
 
-All commands use `noai-watermark` (alias: `photo-metadata`). Add `-v` to any command for verbose output.
+All commands use `noai-watermark`. Add `-v` for verbose output.
 
-### Watermark Removal
+Watermark removal is the default mode. Use `--metadata` for metadata operations.
+
+### Watermark Removal (default)
 
 ```bash
-# Basic removal
-noai-watermark source.png --remove-watermark -o cleaned.png
-
-# Force CPU inference
-noai-watermark source.png --remove-watermark --device cpu -o cleaned.png
-
-# Custom strength and steps
-noai-watermark source.png --remove-watermark --strength 0.7 --steps 60 -o cleaned.png
-
-# Use a different base model
-noai-watermark source.png --remove-watermark --model runwayml/stable-diffusion-v1-5 -o cleaned.png
-
-# Photorealistic model for photo inputs
-noai-watermark source.png --remove-watermark --model SG161222/Realistic_Vision_V5.1_noVAE -o cleaned.png
-
-# CtrlRegen profile
-noai-watermark source.png --remove-watermark --model-profile ctrlregen -o cleaned.png
-
-# Skip download confirmation prompt
-noai-watermark source.png --remove-watermark -y -o cleaned.png
-
-# With HuggingFace token (or set HF_TOKEN env var)
-noai-watermark source.png --remove-watermark --hf-token hf_xxxxx -o cleaned.png
+noai-watermark source.png -o cleaned.png
+noai-watermark source.png --device cpu -o cleaned.png
+noai-watermark source.png --strength 0.15 --steps 60 -o cleaned.png
+noai-watermark source.png --model runwayml/stable-diffusion-v1-5 -o cleaned.png
+noai-watermark source.png --model SG161222/Realistic_Vision_V5.1_noVAE -o cleaned.png
+noai-watermark source.png --model-profile ctrlregen -o cleaned.png
+noai-watermark source.png -y -o cleaned.png
+noai-watermark source.png --hf-token hf_xxxxx -o cleaned.png
 ```
 
 ### Metadata Operations
 
 ```bash
-# Clone all metadata from source to target
-noai-watermark source.png target.png -o output.png
-
-# Clone only AI metadata
-noai-watermark source.png target.png -o output.png --ai-only
-
-# Check for AI metadata
-noai-watermark source.png --check-ai
-
-# Remove AI metadata (keeps standard EXIF/XMP)
-noai-watermark source.png --remove-ai -o cleaned.png
-
-# Remove all metadata
-noai-watermark source.png --remove-ai --remove-all-metadata -o cleaned.png
+noai-watermark source.png target.png --metadata -o output.png              # Clone all metadata
+noai-watermark source.png target.png --metadata --ai-only -o output.png    # Clone AI metadata only
+noai-watermark source.png --metadata --check-ai                            # Check for AI metadata
+noai-watermark source.png --metadata --remove-ai -o cleaned.png            # Remove AI metadata
+noai-watermark source.png --metadata --remove-ai --remove-all-metadata -o cleaned.png  # Remove everything
 ```
 
 ---
@@ -386,7 +364,7 @@ Test watermark removal end-to-end with Google SynthID:
 2. **Remove** the watermark:
 
 ```bash
-noai-watermark image.png --remove-watermark -o cleaned.png
+noai-watermark image.png -o cleaned.png
 ```
 
 3. **Verify** by uploading both images to [AI Studio](https://aistudio.google.com/) and using the SynthID detection tool.
@@ -445,7 +423,7 @@ src/
   watermark_profiles.py  # Model IDs, strength presets, profile detection
   img2img_runner.py      # Img2img execution with progress and MPS fallback
   cli.py                 # CLI argument parsing and routing
-  cli_watermark.py       # --remove-watermark command handler
+  cli_watermark.py       # Watermark removal handler
   download_ui.py         # Download progress bars, size estimation, prompts
   progress.py            # Terminal animation and shared pipeline helpers
   ctrlregen/             # CtrlRegen sub-package (optional)

@@ -1,6 +1,6 @@
 [project]
 name = "noai-watermark"
-version = "0.1.8"
+version = "0.1.9"
 description = "AI Metadata Toolkit for cloning, checking, cleaning, and watermark removal"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,7 +36,6 @@ ctrlregen = [
 
 [project.scripts]
 noai-watermark = "cli:main"
-photo-metadata = "cli:main"
 
 [build-system]
 requires = ["hatchling"]

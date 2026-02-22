@@ -1,12 +1,10 @@
 """Command-line interface for noai-watermark.
 
 Provides the ``noai-watermark`` entry point that dispatches to one of
-four workflows:
+two modes:
 
-- ``--check-ai``        — inspect AI metadata
-- ``--remove-ai``       — strip AI metadata fields
-- ``--remove-watermark`` — diffusion-based invisible watermark removal
-- *(default)*           — clone metadata between images
+- *(default)*          — diffusion-based invisible watermark removal
+- ``--metadata``       — metadata operations (clone, check, remove)
 
 The heavy progress-animation and library-silencing logic lives in the
 separate ``progress`` module to keep this file focused on argument
@@ -78,8 +76,17 @@ def _build_parser() -> argparse.ArgumentParser:
     """Construct and return the CLI argument parser."""
     parser = argparse.ArgumentParser(
         prog="noai-watermark",
-        description="Clone, check, and remove AI-generated metadata between PNG and JPG files.",
-        epilog="Example: noai-watermark source.png target.png -o output.png",
+        description=(
+            "Remove invisible AI watermarks from images. "
+            "Use --metadata for metadata operations (clone, check, remove)."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  noai-watermark source.png -o cleaned.png\n"
+            "  noai-watermark source.png --metadata --check-ai\n"
+            "  noai-watermark source.png target.png --metadata -o output.png"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
     parser.add_argument(
@@ -88,68 +95,74 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "target", type=Path, nargs="?",
-        help="Target image file to apply metadata to (not needed with --check-ai or --remove-ai)",
+        help="Target image file (only for metadata cloning with --metadata)",
     )
     parser.add_argument(
         "-o", "--output", type=Path,
-        help="Output file path (default: overwrite target/source file)",
-    )
-    parser.add_argument(
-        "-a", "--ai-only", action="store_true",
-        help="Clone only AI-generated metadata (Stable Diffusion, ComfyUI, Midjourney, etc.)",
+        help="Output file path (default: overwrite source file)",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true",
-        help="Print extracted metadata information",
+        help="Print detailed information during processing",
     )
-    parser.add_argument(
+
+    # ── Metadata mode ───────────────────────────────────────────
+    meta_group = parser.add_argument_group("metadata operations (require --metadata)")
+    meta_group.add_argument(
+        "--metadata", action="store_true",
+        help="Switch to metadata mode (clone, check, or remove metadata)",
+    )
+    meta_group.add_argument(
+        "-a", "--ai-only", action="store_true",
+        help="Clone only AI-generated metadata",
+    )
+    meta_group.add_argument(
         "--check-ai", action="store_true",
-        help="Check if source contains AI metadata, don't clone",
+        help="Check if source contains AI metadata",
     )
-    parser.add_argument(
+    meta_group.add_argument(
         "--remove-ai", action="store_true",
         help="Remove all AI-generated metadata from the source image",
     )
-    parser.add_argument(
+    meta_group.add_argument(
         "--remove-all-metadata", action="store_true",
-        help="Remove all AI metadata and standard metadata (use with --remove-ai)",
+        help="Remove all metadata including standard EXIF/XMP (use with --remove-ai)",
     )
-    parser.add_argument(
-        "--remove-watermark", action="store_true",
-        help="Remove invisible watermarks using diffusion model regeneration",
-    )
-    parser.add_argument(
+
+    # ── Watermark removal options (default mode) ────────────────
+    wm_group = parser.add_argument_group("watermark removal options (default mode)")
+    wm_group.add_argument(
         "--strength", type=float, default=0.04,
-        help="Watermark removal strength (0.0-1.0). Default: 0.04",
+        help="Regeneration intensity (0.0-1.0). Default: 0.04",
     )
-    parser.add_argument(
+    wm_group.add_argument(
         "--steps", type=int, default=50,
-        help="Number of denoising steps for watermark removal. Default: 50",
+        help="Number of denoising steps. Default: 50",
     )
-    parser.add_argument(
+    wm_group.add_argument(
         "--model", type=str, default=None,
-        help="HuggingFace model ID for watermark removal. Default: Lykon/dreamshaper-8",
+        help="HuggingFace model ID. Default: Lykon/dreamshaper-8",
     )
-    parser.add_argument(
+    wm_group.add_argument(
         "--model-profile", type=str, default="default",
         choices=["default", "ctrlregen"],
         help=(
-            "Model profile shortcut. "
-            "'default' uses Lykon/dreamshaper-8 (simple img2img regen). "
-            "'ctrlregen' uses CtrlRegen (ControlNet + DINOv2 IP-Adapter); "
-            "requires: pip install noai-watermark[ctrlregen]."
+            "Pipeline profile. "
+            "'default': img2img regen (Lykon/dreamshaper-8). "
+            "'ctrlregen': ControlNet + DINOv2 IP-Adapter. "
+            "Default: default"
         ),
     )
-    parser.add_argument(
+    wm_group.add_argument(
         "--device", type=str, default="auto",
         choices=["auto", "cpu", "mps", "cuda"],
-        help="Inference device for watermark removal. Default: auto",
+        help="Inference device. Default: auto (CUDA > MPS > CPU)",
     )
-    parser.add_argument(
+    wm_group.add_argument(
         "--hf-token", type=str, default=None,
-        help="HuggingFace API token for authenticated model downloads. Falls back to HF_TOKEN env var.",
+        help="HuggingFace API token. Falls back to HF_TOKEN env var.",
     )
-    parser.add_argument(
+    wm_group.add_argument(
         "-y", "--yes", action="store_true",
         help="Skip confirmation prompt before downloading models.",
     )
@@ -256,37 +269,38 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    if args.check_ai:
-        if has_ai_metadata(args.source):
-            print(f"'{args.source}' contains AI-generated image metadata:")
-            print(get_ai_metadata_summary(args.source))
-            return 0
-        print(f"'{args.source}' does not contain AI-generated image metadata.")
-        return 1
+    # ── Metadata mode ───────────────────────────────────────────
+    if args.metadata or args.check_ai or args.remove_ai:
+        if args.check_ai:
+            if has_ai_metadata(args.source):
+                print(f"'{args.source}' contains AI-generated image metadata:")
+                print(get_ai_metadata_summary(args.source))
+                return 0
+            print(f"'{args.source}' does not contain AI-generated image metadata.")
+            return 1
 
-    if args.remove_ai:
-        return _handle_remove_ai(args)
+        if args.remove_ai:
+            return _handle_remove_ai(args)
 
-    if args.remove_watermark:
-        from cli_watermark import handle_remove_watermark
-        return handle_remove_watermark(args)
+        if args.target is None:
+            print("Error: Target file is required for metadata cloning.", file=sys.stderr)
+            print("Usage: noai-watermark source.png target.png --metadata [-o output.png]", file=sys.stderr)
+            return 1
+        if not args.target.exists():
+            print(f"Error: Target file '{args.target}' does not exist.", file=sys.stderr)
+            return 1
+        if not is_supported_format(args.target):
+            print(
+                f"Warning: Target file '{args.target}' may not be a supported format "
+                f"({', '.join(SUPPORTED_FORMATS)}).",
+                file=sys.stderr,
+            )
 
-    if args.target is None:
-        print("Error: Target file is required for cloning.", file=sys.stderr)
-        print("Usage: noai-watermark source.png target.png [-o output.png]", file=sys.stderr)
-        print("       noai-watermark source.png --remove-ai [-o output.png]", file=sys.stderr)
-        return 1
-    if not args.target.exists():
-        print(f"Error: Target file '{args.target}' does not exist.", file=sys.stderr)
-        return 1
-    if not is_supported_format(args.target):
-        print(
-            f"Warning: Target file '{args.target}' may not be a supported format "
-            f"({', '.join(SUPPORTED_FORMATS)}).",
-            file=sys.stderr,
-        )
+        return _handle_clone(args)
 
-    return _handle_clone(args)
+    # ── Default: watermark removal ──────────────────────────────
+    from cli_watermark import handle_remove_watermark
+    return handle_remove_watermark(args)
 
 
 if __name__ == "__main__":

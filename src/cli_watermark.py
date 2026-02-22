@@ -1,4 +1,4 @@
-"""CLI handler for the ``--remove-watermark`` command.
+"""CLI handler for the default watermark removal mode.
 
 Extracted from ``cli.py`` so the main CLI module stays focused on
 argument parsing and routing.
