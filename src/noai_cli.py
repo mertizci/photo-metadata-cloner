@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from __init__ import __version__
 from metadata_handler import (
     clone_metadata,
     extract_metadata,
@@ -33,15 +34,16 @@ from metadata_handler import (
 
 # ── Branding ────────────────────────────────────────────────────────
 
-_ASCII_LOGO = """
+_ASCII_ART = """\
  ███╗   ██╗ ██████╗  █████╗ ██╗
  ████╗  ██║██╔═══██╗██╔══██╗██║
  ██╔██╗ ██║██║   ██║███████║██║
  ██║╚██╗██║██║   ██║██╔══██║██║
  ██║ ╚████║╚██████╔╝██║  ██║██║
- ╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝╚═╝
-    ─── noai-watermark ───
-"""
+ ╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝╚═╝"""
+
+_VERSION_TAG = f"─── noai-watermark v.{__version__} ───"
+_ASCII_LOGO = f"\n{_ASCII_ART}\n {_VERSION_TAG}\n"
 
 
 def _print_ascii_logo() -> None:
