@@ -91,18 +91,16 @@ Don't use this to strip attribution from content that isn't yours. Don't use it 
 ## Quick Start
 
 ```bash
-pip install "noai-watermark[watermark]"
+pip install noai-watermark
 
+# Default pipeline (img2img, fast)
 noai-watermark source.png -o cleaned.png
-```
 
-For best quality (larger download):
-
-```bash
-pip install "noai-watermark[ctrlregen]"
-
+# CtrlRegen pipeline (best quality)
 noai-watermark source.png --model-profile ctrlregen -o cleaned.png
 ```
+
+> Only need one pipeline? Use `pip install "noai-watermark[default]"` or `pip install "noai-watermark[ctrlregen]"` instead.
 
 ---
 
@@ -111,34 +109,43 @@ noai-watermark source.png --model-profile ctrlregen -o cleaned.png
 ### From PyPI
 
 ```bash
-# Metadata tools only (no ML dependencies)
 pip install noai-watermark
+```
 
-# Default watermark removal (img2img)
-pip install "noai-watermark[watermark]"
+Both watermark removal pipelines (default img2img + CtrlRegen) are included out of the box.
 
-# CtrlRegen watermark removal (best quality)
+<details>
+<summary>Install only one pipeline</summary>
+
+If you want a lighter install with only one pipeline:
+
+```bash
+# Default pipeline only (img2img — smaller download)
+pip install "noai-watermark[default]"
+
+# CtrlRegen pipeline only (best quality)
 pip install "noai-watermark[ctrlregen]"
 ```
+
+</details>
 
 > **macOS (Homebrew Python):** If you get `externally-managed-environment` error, use `pipx` or a virtual environment:
 >
 > ```bash
 > # Option 1: pipx (recommended for CLI tools)
 > brew install pipx
-> pipx install "noai-watermark[watermark]"
+> pipx install noai-watermark
 >
 > # Option 2: virtual environment
 > python3 -m venv ~/.noai-venv
 > source ~/.noai-venv/bin/activate
-> pip install "noai-watermark[watermark]"
+> pip install noai-watermark
 > ```
 
 ### From GitHub
 
 ```bash
 pip install "git+https://github.com/mertizci/noai-watermark.git"
-pip install "noai-watermark[watermark] @ git+https://github.com/mertizci/noai-watermark.git"
 ```
 
 ### Local Development
@@ -146,14 +153,13 @@ pip install "noai-watermark[watermark] @ git+https://github.com/mertizci/noai-wa
 ```bash
 git clone https://github.com/mertizci/noai-watermark.git
 cd noai-watermark
-pip install -e ".[dev,watermark,ctrlregen]"
+pip install -e ".[dev]"
 ```
 
 ### Requirements
 
 - Python >= 3.10
-- Core: `pillow >= 10.0.0`, `piexif >= 1.1.3`
-- Watermark removal: `torch >= 2.0.0`, `diffusers >= 0.25.0`, `transformers >= 4.35.0`, `accelerate >= 0.25.0`
+- `pillow >= 10.0.0`, `piexif >= 1.1.3`, `torch >= 2.0.0`, `diffusers >= 0.25.0`, `transformers >= 4.35.0`, `accelerate >= 0.25.0`, `controlnet-aux`, `color-matcher`, `safetensors`
 - Supported formats: PNG, JPEG
 
 ### System Requirements
@@ -181,9 +187,9 @@ Two regeneration pipelines are available. Both use diffusion-based reconstructio
 | **Quality** | Good — may drift on fine details at high strength | Best — preserves structure and color more faithfully |
 | **Resolution** | Any size (processed at original resolution) | Any size (tile-based processing, see below) |
 | **Speed** | Faster | Slower (multiple models in the pipeline) |
-| **Install** | `pip install "noai-watermark[watermark]"` | `pip install "noai-watermark[ctrlregen]"` |
+| **Install** | Included by default (or `[default]` alone) | Included by default (or `[ctrlregen]` alone) |
 
-> **Recommendation:** Start with `default` for quick iteration. Switch to `ctrlregen` when output quality is the priority.
+> **Recommendation:** Both pipelines are installed with `pip install noai-watermark`. Start with `default` for quick iteration. Switch to `ctrlregen` when output quality is the priority.
 
 Download sizes are estimated dynamically from HuggingFace Hub before the first run. Models are cached locally after download — subsequent runs are instant.
 
@@ -431,8 +437,9 @@ The following AI metadata sources are detected and can be cloned or stripped:
 
 | Problem | Solution |
 |---------|----------|
-| `ImportError` for torch / diffusers | `pip install "noai-watermark[watermark]"` |
-| `externally-managed-environment` | Use `pipx install "noai-watermark[watermark]"` or a virtual environment. See [Installation](#installation). |
+| `ImportError` for torch / diffusers | `pip install noai-watermark` (all dependencies are included by default) |
+| `ImportError` for controlnet-aux / color-matcher | `pip install noai-watermark` (all dependencies are included by default) |
+| `externally-managed-environment` | Use `pipx install noai-watermark` or a virtual environment. See [Installation](#installation). |
 | HuggingFace Hub rate limit | Set `HF_TOKEN` env var or pass `--hf-token` |
 | `MPS backend out of memory` | Use `--device cpu`, or lower `--strength` and `--steps` |
 | Output too different from input | Decrease `--strength` |

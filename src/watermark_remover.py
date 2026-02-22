@@ -144,7 +144,7 @@ class WatermarkRemover:
         if not is_ctrlregen_available():
             raise ImportError(
                 "CtrlRegen requires additional dependencies. "
-                "Install with: pip install noai-watermark[ctrlregen]"
+                "Install with: pip install noai-watermark"
             )
         if self._ctrlregen_engine is None:
             self._ctrlregen_engine = self._make_ctrlregen_engine()
@@ -364,7 +364,7 @@ class WatermarkRemover:
         if not is_ctrlregen_available():
             raise ImportError(
                 "CtrlRegen requires additional dependencies. "
-                "Install with: pip install noai-watermark[ctrlregen]"
+                "Install with: pip install noai-watermark"
             )
 
         if self._ctrlregen_engine is None:

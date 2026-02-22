@@ -37,7 +37,7 @@ def handle_remove_watermark(args: argparse.Namespace) -> int:
 
     if not is_watermark_removal_available():
         print("Error: Watermark removal requires additional dependencies.", file=sys.stderr)
-        print("Install them with: pip install noai-watermark[watermark]", file=sys.stderr)
+        print("Install them with: pip install noai-watermark", file=sys.stderr)
         return 1
 
     output_path = args.output if args.output else args.source
@@ -46,7 +46,7 @@ def handle_remove_watermark(args: argparse.Namespace) -> int:
     if args.model is None and args.model_profile == "ctrlregen":
         print(
             "Using CtrlRegen profile (ControlNet + DINOv2 IP-Adapter). "
-            "Requires: pip install noai-watermark[ctrlregen]"
+            "Requires: pip install noai-watermark"
         )
 
     from download_ui import get_models_to_download, preload_silently, prompt_for_download

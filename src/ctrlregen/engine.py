@@ -106,7 +106,7 @@ class CtrlRegenEngine:
             raise ImportError(
                 "CtrlRegen requires additional dependencies: "
                 + ", ".join(missing)
-                + ". Install with: pip install noai-watermark[ctrlregen]"
+                + ". Install with: pip install noai-watermark"
             )
 
         self.base_model_id = base_model_id or DEFAULT_BASE_MODEL
