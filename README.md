@@ -101,6 +101,21 @@ pip install noai-watermark
 
 Both watermark removal pipelines (default img2img + CtrlRegen) are included out of the box.
 
+### From Homebrew (macOS)
+
+```bash
+brew install mertizci/noai-watermark/noai-watermark
+```
+
+Optional (if you prefer tapping once):
+
+```bash
+brew tap mertizci/noai-watermark
+brew install noai-watermark
+```
+
+Homebrew packages are built from macOS release binaries and automatically updated on each GitHub release.
+
 > **macOS (Homebrew Python):** If you get `externally-managed-environment` error, use `pipx` or a virtual environment:
 >
 > ```bash
@@ -133,6 +148,22 @@ pip install -e ".[dev]"
 - Python >= 3.10
 - `pillow >= 10.0.0`, `piexif >= 1.1.3`, `torch >= 2.0.0`, `diffusers >= 0.25.0`, `transformers >= 4.35.0`, `accelerate >= 0.25.0`, `controlnet-aux`, `color-matcher`, `safetensors`
 - Supported formats: PNG, JPEG
+
+### Maintainer Setup: Homebrew Automation
+
+The repository includes `.github/workflows/release-homebrew.yml` to:
+
+1. Build and upload macOS binaries (`arm64` and `amd64`) to the release.
+2. Update the Homebrew tap formula with fresh asset URLs and SHA256 values.
+
+Configure these once in your GitHub repository settings:
+
+- **Secret:** `HOMEBREW_TAP_GITHUB_TOKEN` (PAT with write access to tap repository)
+- **Variable (optional):** `HOMEBREW_TAP_REPOSITORY` (defaults to `mertizci/homebrew-noai-watermark`)
+
+Tap repository formula path is expected at:
+
+- `Formula/noai-watermark.rb`
 
 ### System Requirements
 

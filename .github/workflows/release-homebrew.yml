@@ -1,0 +1,157 @@
+name: Release Homebrew Binary
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.1.21)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload-binary:
+    name: Build macOS binary (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-13
+            arch: amd64
+
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.tag }}
+
+    steps:
+      - name: Validate release tag
+        run: |
+          if [ -z "${RELEASE_TAG}" ]; then
+            echo "Release tag is required."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pyinstaller
+
+      - name: Build standalone binary
+        run: |
+          pyinstaller --onefile --name noai-watermark src/noai_cli.py
+          chmod +x dist/noai-watermark
+
+      - name: Package release asset
+        run: |
+          ASSET_NAME="noai-watermark-darwin-${{ matrix.arch }}.tar.gz"
+          tar -czf "${ASSET_NAME}" -C dist noai-watermark
+          echo "ASSET_NAME=${ASSET_NAME}" >> "${GITHUB_ENV}"
+
+      - name: Upload asset to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${RELEASE_TAG}" "${ASSET_NAME}" --clobber
+
+  update-homebrew-tap:
+    name: Update Homebrew tap formula
+    runs-on: ubuntu-latest
+    needs: build-and-upload-binary
+    if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.tag }}
+      TAP_REPOSITORY: ${{ vars.HOMEBREW_TAP_REPOSITORY || 'mertizci/homebrew-noai-watermark' }}
+
+    steps:
+      - name: Validate release tag
+        run: |
+          if [ -z "${RELEASE_TAG}" ]; then
+            echo "Release tag is required."
+            exit 1
+          fi
+
+      - name: Checkout tap repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TAP_REPOSITORY }}
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          path: tap
+
+      - name: Download release assets and calculate checksums
+        run: |
+          ARM_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/noai-watermark-darwin-arm64.tar.gz"
+          AMD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/noai-watermark-darwin-amd64.tar.gz"
+
+          curl -fL "${ARM_URL}" -o noai-watermark-darwin-arm64.tar.gz
+          curl -fL "${AMD_URL}" -o noai-watermark-darwin-amd64.tar.gz
+
+          ARM_SHA256="$(sha256sum noai-watermark-darwin-arm64.tar.gz | awk '{print $1}')"
+          AMD_SHA256="$(sha256sum noai-watermark-darwin-amd64.tar.gz | awk '{print $1}')"
+
+          VERSION="${RELEASE_TAG#v}"
+
+          echo "ARM_URL=${ARM_URL}" >> "${GITHUB_ENV}"
+          echo "AMD_URL=${AMD_URL}" >> "${GITHUB_ENV}"
+          echo "ARM_SHA256=${ARM_SHA256}" >> "${GITHUB_ENV}"
+          echo "AMD_SHA256=${AMD_SHA256}" >> "${GITHUB_ENV}"
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+
+      - name: Render Homebrew formula
+        run: |
+          cat > tap/Formula/noai-watermark.rb <<EOF
+          class NoaiWatermark < Formula
+            desc "Remove invisible AI watermarks and manage AI image metadata"
+            homepage "https://github.com/${GITHUB_REPOSITORY}"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "${ARM_URL}"
+                sha256 "${ARM_SHA256}"
+              end
+
+              on_intel do
+                url "${AMD_URL}"
+                sha256 "${AMD_SHA256}"
+              end
+            end
+
+            def install
+              bin.install "noai-watermark"
+            end
+
+            test do
+              assert_match "noai-watermark", shell_output("#{bin}/noai-watermark --help")
+            end
+          end
+          EOF
+
+      - name: Commit and push formula update
+        working-directory: tap
+        run: |
+          if git diff --quiet -- Formula/noai-watermark.rb; then
+            echo "Formula is already up to date."
+            exit 0
+          fi
+
+          git add Formula/noai-watermark.rb
+          git -c user.name="github-actions[bot]" \
+              -c user.email="github-actions[bot]@users.noreply.github.com" \
+              commit -m "chore: bump noai-watermark to ${VERSION}"
+          git push
