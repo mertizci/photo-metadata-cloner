@@ -2,6 +2,7 @@
 __pycache__/
 **/__pycache__/
 *.py[cod]
+release.sh
 
 # IDE settings
 .idea/

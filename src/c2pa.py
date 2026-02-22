@@ -63,9 +63,13 @@ def has_c2pa_metadata(image_path: Path) -> bool:
 
                 if chunk_type == C2PA_CHUNK_TYPE:
                     chunk_data = f.read(length)
+                    # Check for any C2PA signature
                     for sig in C2PA_SIGNATURES:
                         if sig in chunk_data:
                             return True
+                    # Also check if chunk_data itself contains C2PA-like patterns
+                    if b"jumb" in chunk_data.lower() or b"c2pa" in chunk_data.lower():
+                        return True
                     f.read(4)
                 else:
                     f.read(length + 4)
@@ -127,6 +131,9 @@ def extract_c2pa_info(image_path: Path) -> dict[str, Any]:
 
 def _parse_c2pa_chunk(chunk_data: bytes, c2pa_info: dict[str, Any]) -> None:
     """Parse C2PA chunk data and populate info dictionary."""
+    # Debug: log raw chunk info
+    c2pa_info["_raw_chunk_size"] = len(chunk_data)
+    
     # Find issuers
     issuers = []
     for sig, name in C2PA_ISSUERS.items():
@@ -143,23 +150,34 @@ def _parse_c2pa_chunk(chunk_data: bytes, c2pa_info: dict[str, Any]) -> None:
     if ai_tools:
         c2pa_info["ai_tool"] = ", ".join(set(ai_tools))
 
-    # Extract software agent
-    software_agent_match = re.search(
-        rb"softwareAgent.*?dname([^\x00]+?)(?:q|l|m|n)", chunk_data, re.DOTALL
-    )
-    if software_agent_match:
-        agent = software_agent_match.group(1).decode("utf-8", errors="ignore").strip()
-        if agent and len(agent) < 50:
-            c2pa_info["software_agent"] = agent
+    # Extract software agent (multiple patterns)
+    patterns = [
+        rb"softwareAgent.*?dname([^\x00]+?)(?:q|l|m|n)",
+        rb"software_agent[^\x00]*?([A-Za-z0-9_\-\.]+)",
+        rb"Software[^\x00]*?([A-Za-z0-9_\-\. ]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, chunk_data, re.DOTALL | re.IGNORECASE)
+        if match:
+            agent = match.group(1).decode("utf-8", errors="ignore").strip()
+            if agent and len(agent) < 100:
+                c2pa_info["software_agent"] = agent
+                break
 
-    # Extract claim generator
-    claim_gen_match = re.search(
-        rb"claim_generator_info.*?dname([^\x00]+?)(?:w|q|l|m|n|i)", chunk_data, re.DOTALL
-    )
-    if claim_gen_match:
-        gen_name = claim_gen_match.group(1).decode("utf-8", errors="ignore").strip()
-        if gen_name and len(gen_name) < 50:
-            c2pa_info["claim_generator"] = gen_name
+    # Extract claim generator (multiple patterns)
+    claim_patterns = [
+        rb"claim_generator[^\x00]*?([A-Za-z0-9_\-\.\/\:]+)",
+        rb"claimGenerator[^\x00]*?([A-Za-z0-9_\-\.\/\:]+)",
+        rb"dname([^\x00]{3,50})(?:q|l|m|n|i)",
+    ]
+    for pattern in claim_patterns:
+        match = re.search(pattern, chunk_data, re.DOTALL | re.IGNORECASE)
+        if match:
+            gen_name = match.group(1).decode("utf-8", errors="ignore").strip()
+            # Filter out common false positives
+            if gen_name and len(gen_name) < 100 and not gen_name.startswith(("\\x", "\\\\x")):
+                c2pa_info["claim_generator"] = gen_name
+                break
 
     # Find actions
     actions = []
@@ -181,6 +199,8 @@ def _parse_c2pa_chunk(chunk_data: bytes, c2pa_info: dict[str, Any]) -> None:
         c2pa_info["source_type"] = "trainedAlgorithmicMedia (AI-generated)"
     elif b"algorithmicMedia" in chunk_data:
         c2pa_info["source_type"] = "algorithmicMedia"
+    elif b"compositeWithTrainedAlgorithmicMedia" in chunk_data:
+        c2pa_info["source_type"] = "compositeWithTrainedAlgorithmicMedia (AI-enhanced)"
 
 
 def extract_c2pa_chunk(image_path: Path) -> bytes | None:
@@ -214,9 +234,14 @@ def extract_c2pa_chunk(image_path: Path) -> bytes | None:
                     chunk_data = f.read(length)
                     crc = f.read(4)
 
+                    # Check for any C2PA signature
                     for sig in C2PA_SIGNATURES:
                         if sig in chunk_data:
                             return chunk_header + chunk_data + crc
+                    
+                    # Also check lowercase variants
+                    if b"jumb" in chunk_data.lower() or b"c2pa" in chunk_data.lower():
+                        return chunk_header + chunk_data + crc
                 else:
                     f.read(length + 4)
 

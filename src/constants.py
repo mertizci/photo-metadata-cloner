@@ -69,8 +69,16 @@ AI_KEYWORDS = [
 C2PA_CHUNK_TYPE = b"caBX"  # JUMBF container chunk type for C2PA
 C2PA_SIGNATURES = [
     b"c2pa",
+    b"C2PA",
     b"jumb",
     b"jumd",
+    b"JUMBF",
+    b"jumbf",
+    b"cbor",
+    b"contentcreds",
+    b"digid",
+    b"assertions",
+    b"manifest",
 ]
 
 # C2PA known issuers
