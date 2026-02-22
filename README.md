@@ -213,30 +213,76 @@ Example: `--model-profile default --model runwayml/stable-diffusion-v1-5` uses t
 
 All commands use `noai-watermark`. Add `-v` for verbose output.
 
-Watermark removal is the default mode. Use `--metadata` for metadata operations.
+Watermark removal is the **default mode** — no flag needed. Use `--metadata` to switch to metadata operations.
 
 ### Watermark Removal (default)
 
 ```bash
+# Remove watermark with default settings (strength=0.04, steps=50)
 noai-watermark source.png -o cleaned.png
+
+# Force CPU inference (try this if MPS is slow on Mac)
 noai-watermark source.png --device cpu -o cleaned.png
+
+# Higher strength for stubborn watermarks
 noai-watermark source.png --strength 0.15 --steps 60 -o cleaned.png
+
+# Use a different base model
 noai-watermark source.png --model runwayml/stable-diffusion-v1-5 -o cleaned.png
+
+# Photorealistic model (better for real photos)
 noai-watermark source.png --model SG161222/Realistic_Vision_V5.1_noVAE -o cleaned.png
+
+# CtrlRegen pipeline (best quality, larger download)
 noai-watermark source.png --model-profile ctrlregen -o cleaned.png
+
+# Skip the download confirmation prompt
 noai-watermark source.png -y -o cleaned.png
+
+# Authenticate with HuggingFace (or set HF_TOKEN env var)
 noai-watermark source.png --hf-token hf_xxxxx -o cleaned.png
 ```
 
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-o, --output` | overwrites source | Output file path |
+| `--strength` | `0.04` | Regeneration intensity (0.0–1.0) |
+| `--steps` | `50` | Denoising iterations |
+| `--model` | `Lykon/dreamshaper-8` | Any SD 1.5-compatible HuggingFace model |
+| `--model-profile` | `default` | Pipeline: `default` or `ctrlregen` |
+| `--device` | `auto` | `auto`, `cpu`, `mps`, or `cuda` |
+| `--hf-token` | — | HuggingFace API token |
+| `-y, --yes` | — | Skip download confirmation |
+| `-v, --verbose` | — | Show detailed processing info |
+
 ### Metadata Operations
 
+Use `--metadata` to switch to metadata mode. `--check-ai` and `--remove-ai` imply `--metadata` automatically.
+
 ```bash
-noai-watermark source.png target.png --metadata -o output.png              # Clone all metadata
-noai-watermark source.png target.png --metadata --ai-only -o output.png    # Clone AI metadata only
-noai-watermark source.png --metadata --check-ai                            # Check for AI metadata
-noai-watermark source.png --metadata --remove-ai -o cleaned.png            # Remove AI metadata
-noai-watermark source.png --metadata --remove-ai --remove-all-metadata -o cleaned.png  # Remove everything
+# Clone all metadata from source to target
+noai-watermark source.png target.png --metadata -o output.png
+
+# Clone only AI-generated metadata
+noai-watermark source.png target.png --metadata --ai-only -o output.png
+
+# Check if an image contains AI metadata
+noai-watermark source.png --check-ai
+
+# Remove AI metadata (keeps standard EXIF/XMP)
+noai-watermark source.png --remove-ai -o cleaned.png
+
+# Remove all metadata (AI + standard)
+noai-watermark source.png --remove-ai --remove-all-metadata -o cleaned.png
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--metadata` | Switch to metadata mode |
+| `--check-ai` | Check for AI metadata (implies `--metadata`) |
+| `--remove-ai` | Remove AI metadata (implies `--metadata`) |
+| `--remove-all-metadata` | Also remove standard EXIF/XMP (use with `--remove-ai`) |
+| `-a, --ai-only` | Clone only AI metadata (for cloning mode) |
 
 ---
 
@@ -305,24 +351,12 @@ remove_ai_metadata(Path("image.png"), Path("cleaned.png"))
 
 ### How It Works
 
-1. **Encode** — the input image is projected into diffusion latent space via the VAE encoder.
-2. **Noise** — controlled noise is injected according to `strength`, disrupting hidden watermark patterns embedded in the pixel data.
-3. **Denoise** — the diffusion model reconstructs the image over `steps` iterations via reverse diffusion.
-4. **Decode** — the VAE decoder converts the clean latents back to pixel space, producing an output with reduced or eliminated watermark artifacts.
+1. **Encode** — project the image into diffusion latent space via the VAE encoder.
+2. **Noise** — inject controlled noise according to `strength`, disrupting hidden watermark patterns.
+3. **Denoise** — reconstruct via reverse diffusion over `steps` iterations.
+4. **Decode** — convert clean latents back to pixel space.
 
-This targets **invisible/embedded** watermark traces (SynthID, StableSignature, TreeRing, etc.), not visible logos or text overlays.
-
-### Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `--strength` | `0.04` | How strongly the image is regenerated (0.0–1.0). Higher = more watermark removal but more visual change. |
-| `--steps` | `50` | Denoising iterations. More steps = better quality, slower. |
-| `--model-profile` | `default` | Pipeline architecture: `default` or `ctrlregen`. See [Pipeline Profiles](#pipeline-profiles). |
-| `--model` | `Lykon/dreamshaper-8` | Base SD checkpoint. Any SD 1.5-compatible HuggingFace model ID. |
-| `--device` | `auto` | Inference device: `auto`, `cpu`, `mps`, or `cuda`. |
-| `--hf-token` | — | HuggingFace API token. Falls back to `HF_TOKEN` env var. |
-| `-y` | — | Skip the download confirmation prompt. |
+This targets **invisible/embedded** watermarks (SynthID, StableSignature, TreeRing), not visible logos or text overlays.
 
 ### Recommended Presets
 
@@ -330,29 +364,18 @@ This targets **invisible/embedded** watermark traces (SynthID, StableSignature, 
 |----------|-------|
 | Minimal change (default) | `--strength 0.04 --steps 50` |
 | Balanced | `--strength 0.15 --steps 50` |
-| Aggressive cleanup | `--strength 0.35 --steps 60` |
+| Aggressive | `--strength 0.35 --steps 60` |
 | Maximum removal | `--strength 0.7 --steps 60` |
 
 ### Tuning Tips
 
 - **Watermark still detected?** Increase `--strength` by 0.05–0.1.
-- **Image changed too much?** Decrease `--strength`, keep `--steps` moderate.
-- **Output noisy or rough?** Increase `--steps` by 10–20.
-- **Too slow?** Reduce `--steps` first, then consider a smaller model.
-- **MPS out of memory?** Use `--device cpu` or lower `--strength`.
+- **Image changed too much?** Decrease `--strength`.
+- **Output noisy?** Increase `--steps` by 10–20.
+- **Too slow?** Reduce `--steps`, or use a GPU.
+- **MPS out of memory?** Use `--device cpu`.
 
-### Compatible Base Models
-
-Any SD 1.5-compatible model from HuggingFace works with `--model`:
-
-| Model | Notes |
-|-------|-------|
-| `Lykon/dreamshaper-8` | Default. Balanced quality and speed. |
-| `runwayml/stable-diffusion-v1-5` | Classic baseline. |
-| `SG161222/Realistic_Vision_V5.1_noVAE` | Photorealistic output. |
-| `segmind/tiny-sd` | Lower memory usage, smaller download. |
-
-Browse more at [HuggingFace](https://huggingface.co/models?pipeline_tag=text-to-image).
+For full flag reference, see [CLI Reference](#cli-reference). For compatible base models, see [Pipeline Profiles](#pipeline-profiles).
 
 ---
 
