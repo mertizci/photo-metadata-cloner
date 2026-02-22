@@ -456,8 +456,8 @@ src/
   watermark_remover.py   # WatermarkRemover class and orchestration
   watermark_profiles.py  # Model IDs, strength presets, profile detection
   img2img_runner.py      # Img2img execution with progress and MPS fallback
-  cli.py                 # CLI argument parsing and routing
-  cli_watermark.py       # Watermark removal handler
+  noai_cli.py            # CLI argument parsing and routing
+  noai_cli_watermark.py  # Watermark removal handler
   download_ui.py         # Download progress bars, size estimation, prompts
   progress.py            # Terminal animation and shared pipeline helpers
   ctrlregen/             # CtrlRegen sub-package (optional)

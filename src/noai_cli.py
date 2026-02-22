@@ -299,7 +299,7 @@ def main() -> int:
         return _handle_clone(args)
 
     # ── Default: watermark removal ──────────────────────────────
-    from cli_watermark import handle_remove_watermark
+    from noai_cli_watermark import handle_remove_watermark
     return handle_remove_watermark(args)
 
 

@@ -9,5 +9,4 @@ if [ ! -d "$VENV_PATH" ]; then
     exit 1
 fi
 
-source "$VENV_PATH/bin/activate"
-python3 -m cli "$@"
+PYTHONPATH="$SCRIPT_DIR/src:$PYTHONPATH" "$VENV_PATH/bin/python" -c "from noai_cli import main; import sys; sys.exit(main())" "$@"
