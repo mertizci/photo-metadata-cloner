@@ -179,12 +179,23 @@ Two regeneration pipelines are available. Both use diffusion-based reconstructio
 |---|---|---|
 | **Method** | Img2img — adds noise then denoises to reconstruct the image | ControlNet (canny edges) + DINOv2 IP-Adapter (semantic guidance) + histogram color matching |
 | **Quality** | Good — may drift on fine details at high strength | Best — preserves structure and color more faithfully |
+| **Resolution** | Any size (processed at original resolution) | Any size (tile-based processing, see below) |
 | **Speed** | Faster | Slower (multiple models in the pipeline) |
 | **Install** | `pip install "noai-watermark[watermark]"` | `pip install "noai-watermark[ctrlregen]"` |
 
 > **Recommendation:** Start with `default` for quick iteration. Switch to `ctrlregen` when output quality is the priority.
 
 Download sizes are estimated dynamically from HuggingFace Hub before the first run. Models are cached locally after download — subsequent runs are instant.
+
+### CtrlRegen Tile-Based Processing
+
+The original CtrlRegen pipeline operates on 512×512px images — a hard limitation of SD 1.5-based ControlNet. To support **arbitrary resolution** images without downscaling, noai-watermark uses an automatic tiling strategy:
+
+1. **Split** — the input image is divided into overlapping 512×512 tiles across a grid.
+2. **Process** — each tile is independently processed through the CtrlRegen pipeline (canny edge detection → ControlNet → DINOv2 IP-Adapter → diffusion).
+3. **Blend** — tiles are merged back using cosine-weighted blending masks that create smooth transitions in the overlap regions, eliminating visible seams.
+
+This means a 2000×2000px photo is processed as a grid of overlapping tiles (e.g. 4×4), each at the native 512px resolution the model was trained on, then seamlessly reassembled at full resolution. No downscaling, no quality loss from resolution mismatch.
 
 <details>
 <summary>CtrlRegen model breakdown</summary>
