@@ -58,18 +58,75 @@ def is_watermark_removal_available() -> bool:
     return _HAS_TORCH and _HAS_DIFFUSERS
 
 
-def _auto_install(packages: list[str]) -> bool:
+def _auto_install(packages: list[str], index_url: str | None = None) -> bool:
     """Attempt to install missing packages via pip. Returns True on success."""
+    import subprocess
+    cmd = [sys.executable, "-m", "pip", "install", *packages]
+    if index_url:
+        cmd.extend(["--index-url", index_url])
+    try:
+        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def _has_nvidia_gpu() -> bool:
+    """Check if an NVIDIA GPU is present via nvidia-smi."""
     import subprocess
     try:
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", *packages],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            ["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
+
+
+def _detect_cuda_index_url() -> str:
+    """Detect the appropriate PyTorch CUDA index URL from nvidia-smi output."""
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi"], stderr=subprocess.DEVNULL, text=True,
+        )
+        for line in out.splitlines():
+            if "CUDA Version" in line:
+                version_str = line.split("CUDA Version:")[-1].strip().rstrip("|").strip()
+                major, minor = version_str.split(".")[:2]
+                cuda_tag = f"cu{major}{minor}"
+                return f"https://download.pytorch.org/whl/{cuda_tag}"
+    except Exception:
+        pass
+    return "https://download.pytorch.org/whl/cu121"
+
+
+def _ensure_torch_cuda() -> bool:
+    """Reinstall torch with CUDA support if NVIDIA GPU is present but CUDA unavailable."""
+    global _HAS_TORCH, torch
+    if not _has_nvidia_gpu():
+        return False
+    if _HAS_TORCH and torch.cuda.is_available():  # type: ignore
+        return True
+
+    index_url = _detect_cuda_index_url()
+    logger.info("NVIDIA GPU detected but torch lacks CUDA. Reinstalling from %s", index_url)
+    import subprocess
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--force-reinstall",
+             "torch", "--index-url", index_url],
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        logger.warning("Failed to reinstall torch with CUDA support.")
+        return False
+
+    import importlib
+    import torch as _torch
+    importlib.reload(_torch)
+    torch = _torch
+    _HAS_TORCH = True
+    return torch.cuda.is_available()  # type: ignore
 
 
 def _ensure_watermark_deps() -> None:
@@ -93,13 +150,20 @@ def _ensure_watermark_deps() -> None:
     StableDiffusionImg2ImgPipeline = _pipe
     _HAS_DIFFUSERS = True
 
+    _ensure_torch_cuda()
+
 
 def get_device() -> str:
     """Get the best available device for inference."""
     if not _HAS_TORCH:
         return "cpu"
     if torch.cuda.is_available():  # type: ignore
-        return "cuda"
+        try:
+            torch.zeros(1, device="cuda")
+            return "cuda"
+        except (AssertionError, RuntimeError):
+            if _ensure_torch_cuda():
+                return "cuda"
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return "mps"
     return "cpu"
