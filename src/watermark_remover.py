@@ -58,10 +58,13 @@ def is_watermark_removal_available() -> bool:
     return _HAS_TORCH and _HAS_DIFFUSERS
 
 
+_CUDA_FIX_ENV_KEY = "NOAI_CUDA_FIXED"
+
+
 def _auto_install(packages: list[str], index_url: str | None = None) -> bool:
     """Attempt to install missing packages via pip. Returns True on success."""
     import subprocess
-    cmd = [sys.executable, "-m", "pip", "install", *packages]
+    cmd = [sys.executable, "-m", "pip", "install", "-q", *packages]
     if index_url:
         cmd.extend(["--index-url", index_url])
     try:
@@ -101,32 +104,62 @@ def _detect_cuda_index_url() -> str:
     return "https://download.pytorch.org/whl/cu121"
 
 
-def _ensure_torch_cuda() -> bool:
-    """Reinstall torch with CUDA support if NVIDIA GPU is present but CUDA unavailable."""
-    global _HAS_TORCH, torch
-    if not _has_nvidia_gpu():
-        return False
-    if _HAS_TORCH and torch.cuda.is_available():  # type: ignore
-        return True
+def _reinstall_torch_cuda_and_restart() -> None:
+    """Reinstall torch with CUDA support showing live progress, then restart."""
+    import re
+    import subprocess
+    from progress import run_with_progress
 
     index_url = _detect_cuda_index_url()
-    logger.info("NVIDIA GPU detected but torch lacks CUDA. Reinstalling from %s", index_url)
-    import subprocess
-    try:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--force-reinstall",
-             "torch", "--index-url", index_url],
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        logger.warning("Failed to reinstall torch with CUDA support.")
-        return False
+    progress_state: dict[str, str] = {
+        "message": "NVIDIA GPU detected — installing CUDA-enabled PyTorch..."
+    }
 
-    import importlib
-    import torch as _torch
-    importlib.reload(_torch)
-    torch = _torch
-    _HAS_TORCH = True
-    return torch.cuda.is_available()  # type: ignore
+    pct_re = re.compile(r"(\d+)%")
+    pkg_re = re.compile(r"(?:Collecting|Downloading|Installing)\s+(\S+)")
+
+    def _run_pip() -> bool:
+        cmd = [
+            sys.executable, "-m", "pip", "install", "--force-reinstall",
+            "torch", "--index-url", index_url,
+        ]
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        for line in iter(proc.stdout.readline, ""):  # type: ignore[union-attr]
+            stripped = line.strip()
+            if not stripped:
+                continue
+            pkg_m = pkg_re.search(stripped)
+            pct_m = pct_re.search(stripped)
+            if pct_m and pkg_m:
+                progress_state["message"] = f"Downloading {pkg_m.group(1)} ({pct_m.group(1)}%)"
+            elif pct_m:
+                progress_state["message"] = f"Downloading CUDA packages ({pct_m.group(1)}%)"
+            elif pkg_m:
+                action = "Installing" if stripped.startswith("Installing") else "Downloading"
+                progress_state["message"] = f"{action} {pkg_m.group(1)}"
+            elif "Successfully installed" in stripped:
+                progress_state["message"] = "CUDA-enabled PyTorch installed successfully"
+        proc.wait()
+        return proc.returncode == 0
+
+    try:
+        success = run_with_progress(_run_pip, progress_state)
+    except Exception:
+        success = False
+
+    if not success:
+        print(
+            f"\n  Failed to install CUDA-enabled PyTorch.\n"
+            f"  Install manually:\n"
+            f"    pip install torch --index-url {index_url}\n",
+            file=sys.stderr,
+        )
+        return
+
+    os.environ[_CUDA_FIX_ENV_KEY] = "1"
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 def _ensure_watermark_deps() -> None:
@@ -150,8 +183,6 @@ def _ensure_watermark_deps() -> None:
     StableDiffusionImg2ImgPipeline = _pipe
     _HAS_DIFFUSERS = True
 
-    _ensure_torch_cuda()
-
 
 def get_device() -> str:
     """Get the best available device for inference."""
@@ -164,23 +195,9 @@ def get_device() -> str:
             del t
             return "cuda"
         except (AssertionError, RuntimeError):
-            if _ensure_torch_cuda():
-                try:
-                    t = torch.tensor([1.0], device="cuda")
-                    _ = t + t
-                    del t
-                    return "cuda"
-                except (AssertionError, RuntimeError):
-                    pass
-    elif _has_nvidia_gpu():
-        if _ensure_torch_cuda():
-            try:
-                t = torch.tensor([1.0], device="cuda")
-                _ = t + t
-                del t
-                return "cuda"
-            except (AssertionError, RuntimeError):
-                pass
+            pass
+    if _has_nvidia_gpu() and not os.environ.get(_CUDA_FIX_ENV_KEY):
+        _reinstall_torch_cuda_and_restart()
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return "mps"
     return "cpu"
@@ -307,18 +324,14 @@ class WatermarkRemover:
             try:
                 self._pipeline = self._pipeline.to(self.device)  # type: ignore
             except (RuntimeError, AssertionError) as exc:
-                if self.device == "cuda":
+                if self.device == "cuda" and not os.environ.get(_CUDA_FIX_ENV_KEY):
                     self._set_progress("CUDA failed. Reinstalling torch with CUDA support...")
-                    if _ensure_torch_cuda():
-                        self._pipeline = self._pipeline.to("cuda")  # type: ignore
-                    else:
-                        raise RuntimeError(
-                            f"CUDA is not available ({exc}). "
-                            "Install CUDA-enabled PyTorch manually:\n"
-                            "  pip install torch --index-url https://download.pytorch.org/whl/cu121"
-                        ) from exc
-                else:
-                    raise
+                    _reinstall_torch_cuda_and_restart()
+                raise RuntimeError(
+                    f"Failed to move model to {self.device} ({exc}). "
+                    "Install CUDA-enabled PyTorch manually:\n"
+                    f"  pip install torch --index-url {_detect_cuda_index_url()}"
+                ) from exc
 
             if hasattr(self._pipeline, "enable_xformers_memory_efficient_attention"):
                 try:
